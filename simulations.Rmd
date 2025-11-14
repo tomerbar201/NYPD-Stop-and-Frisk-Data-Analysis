@@ -1,0 +1,227 @@
+---
+title: "Monte Carlo Simulations of a Stochastic Basketball Shooting Model"
+author: "Data Science Portfolio Project"
+date: "November 13, 2025"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: journal
+    code_folding: hide
+---
+
+```{=html}
+<style>
+.nobullet li {
+ list-style-type: none;
+}
+</style>
+```
+
+```{r setup, include = FALSE}
+# Load necessary libraries for the analysis
+library(tidyverse)
+library(foreach)
+library(doParallel)
+library(knitr) # Included in case kable is used, though not in this part
+```
+
+# Introduction
+
+This project explores a process through large-scale Monte Carlo simulations to model the evolution of a basketball player's shooting probability. We explore how a player's probability evolves based on their performance, using a flexible simulation framework to understand the long-term behavior of this system under different rules.
+
+-----
+
+# Simulation of a Stochastic Process: A Basketball Shooting Model
+
+This part of the project explores a stochastic model where a basketball player's shooting probability evolves based on their performance. We use Monte Carlo simulations to understand the long-term behavior of this system under different rules.
+
+## General Simulation Framework
+
+To facilitate modular and efficient simulations, we first define a flexible function that can run simulations in parallel. This function accepts the specific probability update rule as an argument.
+
+```{r simulation-function}
+run_simulation <- function(n_players, n_shots, prob_formula, track_trajectory = FALSE) {
+  num_cores <- detectCores() - 1
+  if (num_cores < 1) num_cores <- 1 
+  cl <- makeCluster(num_cores)
+  registerDoParallel(cl)
+  
+  results <- foreach(i = 1:n_players, .combine = 'c') %dopar% {
+    k <- 0 # successes
+    if (track_trajectory) {
+      p_history <- numeric(n_shots)
+    }
+    for (n in 0:(n_shots - 1)) {
+      p <- prob_formula(k, n)
+      if (track_trajectory) {
+        p_history[n + 1] <- p
+      }
+      if (runif(1) < p) {
+        k <- k + 1
+      }
+    }
+    if (track_trajectory) {
+      list(list(final_p = prob_formula(k, n_shots), history = p_history))
+    } else {
+      prob_formula(k, n_shots)
+    }
+  }
+  
+  stopCluster(cl)
+  return(results)
+}
+```
+
+## Base Case Simulation and Analysis
+
+We simulate the primary scenario for 10,000 players, each taking 100,000 shots. The probability of making the next shot is given by the rule $p = \frac{k+1}{n+2}$, where `k` is the number of made shots out of `n` attempts.
+
+```{r run-sim-a}
+base_rule <- function(k, n) { (k + 1) / (n + 2) }
+
+final_p_values_a <- run_simulation(
+  n_players = 10000, 
+  n_shots = 100000, 
+  prob_formula = base_rule
+)
+
+results_df_a <- data.frame(final_p = final_p_values_a)
+```
+
+The histogram below shows the distribution of the final shooting probabilities.
+
+```{r plot-a, warning=FALSE}
+ggplot(results_df_a, aes(x = final_p)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.05, fill = "skyblue", color = "white", alpha = 0.8) +
+  labs(
+    title = "Distribution of Final Shooting Probabilities (Base Model)",
+    subtitle = "Simulated for 10,000 players, each taking 100,000 shots",
+    x = "Final Probability (p)",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1))
+```
+
+Surprisingly, the distribution of final probabilities is **Uniform**. Despite the feedback loop where success increases future probability, the system shows no long-term bias. Over many shots, any final shooting percentage is equally likely.
+
+## Theoretical Distribution and Validation
+
+The simulation results can be validated with a formal proof. Let $K_n$ be the number of successes after $n$ shots. We can prove by induction that $K_n$ is uniformly distributed on the set $\{0, 1, ..., n\}$.
+
+  - **Base Case (n=1):** The first shot is made with probability $1/2$. Thus, $Pr(K_1=0) = Pr(K_1=1) = 1/2$, which is uniform on $\{0,1\}$.
+  - **Inductive Step:** Assuming $Pr(K_n=k) = \frac{1}{n+1}$ for all $k \in \{0, ..., n\}$, we can show using the law of total probability that $Pr(K_{n+1}=k') = \frac{1}{n+2}$ for all $k' \in \{0, ..., n+1\}$.
+
+This discrete uniform distribution of successes means that the probability $P_n = \frac{K_n+1}{n+2}$ converges to a continuous **Uniform(0, 1)** distribution as $n \to \infty$. We can overlay this theoretical distribution on our simulation results.
+
+```{r plot-a-b-comparison, warning=FALSE}
+ggplot(results_df_a, aes(x = final_p)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.05, fill = "skyblue", color = "white", alpha = 0.8) +
+  stat_function(fun = dunif, args = list(min = 0, max = 1), color = "red", linewidth = 1.2) +
+  labs(
+    title = "Empirical vs. Theoretical Distribution",
+    subtitle = "The red line shows the theoretical Uniform(0,1) density",
+    x = "Final Probability (p)",
+    y = "Density"
+  ) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(0, 1, 0.2), limits = c(0, 1))
+```
+
+The empirical histogram aligns perfectly with the theoretical uniform density, validating both our simulation and the proof.
+
+## Estimating Conditional Probability of Recovery
+
+Next, we investigate path dependence. What is the probability that a player will finish with a high probability ($p > 0.75$) given that their probability *at some point* dropped below a low threshold ($p < 0.25$)? We estimate this by simulating and tracking the full trajectory of 10,000 players.
+
+```{r run-sim-c}
+trajectories <- run_simulation(
+  n_players = 10000, 
+  n_shots = 100000, 
+  prob_formula = base_rule,
+  track_trajectory = TRUE
+)
+p_ever_low <- sapply(trajectories, function(x) any(x$history < 0.25))
+p_ends_high <- sapply(trajectories, function(x) x$final_p > 0.75)
+N_low <- sum(p_ever_low)
+N_recover <- sum(p_ever_low & p_ends_high)
+
+if (N_low > 0) {
+  estimated_prob <- N_recover / N_low
+} else {
+  estimated_prob <- 0
+}
+```
+
+```{r report-c}
+cat(paste("Number of players simulated:", length(trajectories)))
+cat(paste("\nNumber of players whose p ever dropped below 0.25 (N_low):", N_low))
+cat(paste("\nOf those, number who recovered to finish p > 0.75 (N_recover):", N_recover))
+cat(paste("\n\nEstimated P(Recovery | Dip) =", round(estimated_prob, 5)))
+```
+
+The simulation shows that recovery is extremely rare. This demonstrates strong **path dependence**: once a player's performance history becomes poor, the large number of past failures makes it mathematically improbable to achieve a high final success rate.
+
+## Alternative Confidence Models and Limiting Distributions
+
+We now explore two alternative update rules to see how they affect the final distribution. This process is a form of **Pólya's Urn** scheme, where the limiting distribution is a Beta distribution.
+
+### Model 1: More Affected by Last Shot ($p = \frac{2k+1}{2n+2}$)
+
+This rule gives more weight to recent outcomes. It corresponds to a Beta(0.5, 0.5) distribution.
+
+```{r run-sim-d1}
+more_affected_rule <- function(k, n) { (2 * k + 1) / (2 * n + 2) }
+final_p_values_d1 <- run_simulation(
+  n_players = 10000, n_shots = 100000, prob_formula = more_affected_rule
+)
+results_df_d1 <- data.frame(final_p = final_p_values_d1)
+```
+
+```{r plot-d1, warning=FALSE}
+ggplot(results_df_d1, aes(x = final_p)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.02, fill = "coral", color = "white", alpha = 0.8) +
+  stat_function(fun = dbeta, args = list(shape1 = 0.5, shape2 = 0.5), color = "black", linewidth = 1.2) +
+  labs(title = "Distribution for p = (2k+1)/(2n+2)", subtitle = "Empirical vs. Theoretical Beta(0.5, 0.5)", x = "Final Probability (p)", y = "Density") +
+  theme_minimal()
+```
+
+This rule results in a **U-shaped (Arcsine) distribution**. Players tend to polarize, ending up with either very high or very low success probabilities.
+
+### Model 2: Less Affected by Last Shot ($p = \frac{k+2}{n+4}$)
+
+This rule gives less weight to individual shots, corresponding to a Beta(2, 2) distribution.
+
+```{r run-sim-d2}
+less_affected_rule <- function(k, n) { (k + 2) / (n + 4) }
+final_p_values_d2 <- run_simulation(
+  n_players = 10000, n_shots = 100000, prob_formula = less_affected_rule
+)
+results_df_d2 <- data.frame(final_p = final_p_values_d2)
+```
+
+```{r plot-d2}
+ggplot(results_df_d2, aes(x = final_p)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.05, fill = "seagreen", color = "white", alpha = 0.8) +
+  stat_function(fun = dbeta, args = list(shape1 = 2, shape2 = 2), color = "black", size = 1.2) +
+  labs(title = "Distribution for p = (k+2)/(n+4)", subtitle = "Empirical vs. Theoretical Beta(2, 2)", x = "Final Probability (p)", y = "Density") +
+  theme_minimal()
+```
+
+This rule produces a **bell-shaped distribution** concentrated around 0.5. The weaker influence of each shot leads most players to converge toward an average performance. Our simulations perfectly match the theoretical Beta distributions in all cases.
+
+-----
+
+# Summary and Key Insights
+
+In this stochastic simulation project, we observed:
+
+  * A simple feedback model for probability ($p = (k+1)/(n+2)$) can lead to a surprising **Uniform** distribution of long-term outcomes.
+  * The system exhibits strong **path dependence**, making recovery from a poor start (e.g., p \< 0.25) highly improbable.
+  * Minor changes to the update rule, which are analogous to a Pólya's Urn scheme, dramatically alter the final limiting Beta distribution.
+      * A rule more sensitive to recent shots (Beta(0.5, 0.5)) creates a **U-shaped** distribution, polarizing outcomes.
+      * A rule less sensitive to recent shots (Beta(2, 2)) creates a **bell-shaped** distribution, centralizing outcomes around 0.5.
+
+Overall, this project showcases the ability to explore complex theoretical models using parallelized simulation and mathematical validation.
+
