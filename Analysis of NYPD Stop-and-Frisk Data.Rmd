@@ -269,7 +269,8 @@ borough_data <- nyc_boroughs_analysis %>%
   mutate(
     Stops = replace_na(Stops, 0),
     Pop_Pct = Population / sum(Population) * 100,
-    Stops_Pct = Stops / sum(Stops) * 100
+    Stops_Pct = Stops / sum(Stops) * 100,
+    Stops_Per_1k = (Stops / Population) * 1000
   )
 ```
 
@@ -281,9 +282,9 @@ pop_map <- ggplot(borough_data) +
   theme_void()
 
 stops_map <- ggplot(borough_data) +
-  geom_sf(aes(fill = Stops_Pct)) +
-  scale_fill_viridis_c(name = "Stops %") +
-  labs(title = "Police Stops Percentage by Borough") + 
+  geom_sf(aes(fill = Stops_Per_1k)) +
+  scale_fill_viridis_c(name = "Stops/1k", option = "magma") +
+  labs(title = "Stops per 1,000 Residents") + 
   theme_void()
 
 pop_map + stops_map
@@ -373,7 +374,8 @@ word_counts <- police_stops %>%
   filter(!is.na(SUSPECT_OTHER_DESCRIPTION)) %>%
   unnest_tokens(word, SUSPECT_OTHER_DESCRIPTION) %>%
   anti_join(get_stopwords(), by = "word") %>%
-  filter(word != "null") %>%
+  filter(!word %in% c("null", "black", "white", "blue", "red", "green", 
+                      "yellow", "orange", "purple", "gray", "grey", "brown", "wearing")) %>%
   count(word, sort = TRUE)
 
 top_10_words <- head(word_counts, 10)
@@ -483,7 +485,7 @@ This analysis of the 2024 NYPD Stop-and-Frisk data revealed several critical, st
 1.  **Profound Racial Disparity:** The analysis **conclusively rejected the hypothesis** that stops are proportional to population. Black and Hispanic individuals are stopped at rates significantly higher than their population share.
 2.  **Geographic Disparity:** This disproportionality also exists geographically. Stops are heavily concentrated in the Bronx and Brooklyn, far exceeding what would be expected by their populations alone.
 3.  **Temporal Patterns:** Stops are not random; they are **significantly more likely to occur at night**, with a large spike between 9 PM and 11 PM.
-4.  **Disparate Outcomes:** The consequences of stops are not uniform. Black and Hispanic individuals are **more likely to be arrested** following a stop than White or Asian individuals.
+4.  **Disparate Outcomes:** The consequences of stops are not uniform. Black and Hispanic individuals are **less likely to be arrested** following a stop than White or Asian individuals, suggesting a lower threshold of suspicion is applied to these groups.
 5.  **Descriptive Language:** Officer descriptions of suspects are highly formulaic, focusing on **clothing and color**, with clear seasonal variations (e.g., "jacket" in winter, "shorts" in summer).
 
 ## 8.2. Limitations
